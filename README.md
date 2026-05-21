@@ -14,7 +14,7 @@ Install Python dependencies:
 pip install -r requirements.txt
 ```
 
-Set your OpenAI API key so the app can identify the real content inside the extracted frames:
+Set your OpenAI API key in your terminal (e.g. powershell) so the app can identify the real content inside the extracted frames:
 
 ```powershell
 $env:OPENAI_API_KEY="your_api_key_here"
