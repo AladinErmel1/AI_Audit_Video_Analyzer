@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Video Interpreter</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="workspace">
+        <div class="upload-panel">
+          <div class="brand-row">
+            <div>
+              <p class="eyebrow">FFmpeg + OpenCV</p>
+              <h1>Video Interpreter</h1>
+            </div>
+            <span id="health" class="status-pill">Checking tools</span>
+          </div>
+
+          <form id="uploadForm" class="dropzone">
+            <input id="videoInput" name="video" type="file" accept="video/*">
+            <div class="dropzone-content">
+              <span class="upload-icon">+</span>
+              <strong>Upload a video</strong>
+              <span>Frames are extracted locally, interpreted with a vision model, and turned into a spoken audience guide.</span>
+            </div>
+          </form>
+
+          <div id="fileMeta" class="file-meta">No file selected</div>
+          <button id="analyzeButton" class="primary-button" type="button" disabled>Analyze video</button>
+          <div id="progress" class="progress" hidden>
+            <div></div>
+          </div>
+          <p id="message" class="message"></p>
+        </div>
+
+        <section class="result-panel" aria-live="polite">
+          <div class="result-header">
+            <div>
+              <p class="eyebrow">Generated output</p>
+              <h2>Audience guide script</h2>
+            </div>
+            <button id="copyButton" class="ghost-button" type="button" disabled>Copy</button>
+          </div>
+
+          <div id="emptyState" class="empty-state">Upload a video to generate a natural spoken guide designed to stay below three minutes.</div>
+
+          <div id="results" class="results" hidden>
+            <div class="metrics" id="metrics"></div>
+            <div class="script-box">
+              <h3 id="scriptTitle"></h3>
+              <p id="scriptStats"></p>
+              <textarea id="scriptText" readonly></textarea>
+            </div>
+            <div class="analysis-grid">
+              <section>
+                <h3>Interpretation</h3>
+                <p id="overview"></p>
+                <p id="structure"></p>
+              </section>
+              <section>
+                <h3>Timeline</h3>
+                <div id="timeline" class="timeline"></div>
+              </section>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>
