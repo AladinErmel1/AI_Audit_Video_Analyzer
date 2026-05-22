@@ -1,0 +1,14 @@
+[build]
+nixpacks = "python-3.13"
+
+[build.nixpacks]
+apt = [
+  "libxcb1",
+  "libxcb-render0", 
+  "libxcb-shape0",
+  "libxcb-xfixes0",
+  "libsm6",
+  "libxext6",
+  "libxrender-dev",
+  "libgomp1"
+]
