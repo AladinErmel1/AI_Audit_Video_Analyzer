@@ -1,4 +1,4 @@
-from http import HTTPStatus
+﻿from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import base64
@@ -9,8 +9,6 @@ import mimetypes
 import os
 import shutil
 import subprocess
-import sys
-import time
 import urllib.error
 import urllib.request
 import uuid
@@ -32,13 +30,15 @@ DATA_DIR = ROOT / "data"
 UPLOAD_DIR = DATA_DIR / "uploads"
 FRAME_DIR = DATA_DIR / "frames"
 MAX_UPLOAD_BYTES = 750 * 1024 * 1024
-TARGET_SCRIPT_WORDS = 390
+MIN_AUDIT_FRAMES = 4
+MAX_AUDIT_FRAMES = 48
+DEFAULT_AUDIT_FRAMES = 16
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 DEFAULT_VISION_MODEL = "gpt-4.1-mini"
 
 
 class AppHandler(SimpleHTTPRequestHandler):
-    server_version = "VideoInterpreter/1.0"
+    server_version = "AIAuditVideoAnalyzer/1.0"
 
     def translate_path(self, path):
         path = path.split("?", 1)[0].split("#", 1)[0]
@@ -69,8 +69,8 @@ class AppHandler(SimpleHTTPRequestHandler):
         except UserFacingError as exc:
             self.respond_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         except Exception as exc:
-            self.log_error("analysis failed: %s", exc)
-            self.respond_json({"error": "Video analysis failed. Check the terminal for details."}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            self.log_error("audit analysis failed: %s", exc)
+            self.respond_json({"error": "Audit video analysis failed. Check the terminal for details."}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def respond_json(self, payload, status=HTTPStatus.OK):
         body = json.dumps(payload, indent=2).encode("utf-8")
@@ -113,6 +113,7 @@ def handle_upload(handler):
     file_item = form["video"]
     if not getattr(file_item, "filename", None):
         raise UserFacingError("Choose a video file before analyzing.")
+    audit_frame_count = parse_audit_frame_count(form)
 
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     FRAME_DIR.mkdir(parents=True, exist_ok=True)
@@ -130,43 +131,47 @@ def handle_upload(handler):
     if not frames:
         raise UserFacingError("No frames could be extracted from the video.")
 
-    frame_analysis = analyze_frames(frames)
-    semantic_analysis = analyze_frame_content(frames, metadata)
-    interpretation = interpret_video(metadata, frame_analysis, semantic_analysis)
-    script = generate_script(metadata, frame_analysis, interpretation)
+    visual_analysis = analyze_frames(frames)
+    audit_report = analyze_audit_content(frames, metadata, visual_analysis, audit_frame_count)
+    effective_audit_frames = audit_report.get("effectiveFramesReviewed", 0)
 
     return {
         "jobId": job_id,
         "fileName": Path(file_item.filename).name,
         "metadata": metadata,
         "framesAnalyzed": len(frames),
-        "contentFramesAnalyzed": len(semantic_analysis.get("frames", [])),
-        "semanticAnalysis": semantic_analysis,
-        "interpretation": interpretation,
-        "timeline": frame_analysis["timeline"],
-        "script": script,
+        "requestedAuditFrames": audit_frame_count,
+        "auditFramesAnalyzed": effective_audit_frames,
+        "effectiveAuditFrames": effective_audit_frames,
+        "visualAnalysis": visual_analysis,
+        "auditReport": audit_report,
     }
+
+
+def parse_audit_frame_count(form):
+    raw_value = form.getvalue("auditFrames", str(DEFAULT_AUDIT_FRAMES))
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        raise UserFacingError("Audit frame count must be a number.")
+    return max(MIN_AUDIT_FRAMES, min(MAX_AUDIT_FRAMES, value))
 
 
 def probe_video(video_path):
     cmd = [
-        "ffprobe",
-        "-v", "error",
-        "-select_streams", "v:0",
+        "ffprobe", "-v", "error", "-select_streams", "v:0",
         "-show_entries", "stream=width,height,avg_frame_rate:format=duration",
-        "-of", "json",
-        str(video_path),
+        "-of", "json", str(video_path),
     ]
     completed = subprocess.run(cmd, capture_output=True, text=True, check=True)
     data = json.loads(completed.stdout)
     stream = data.get("streams", [{}])[0]
     duration = float(data.get("format", {}).get("duration") or 0)
-    fps = parse_fps(stream.get("avg_frame_rate", "0/1"))
     return {
         "duration": round(duration, 2),
         "width": int(stream.get("width") or 0),
         "height": int(stream.get("height") or 0),
-        "fps": round(fps, 2),
+        "fps": round(parse_fps(stream.get("avg_frame_rate", "0/1")), 2),
     }
 
 
@@ -181,16 +186,13 @@ def parse_fps(value):
 
 def extract_frames(video_path, output_dir, duration):
     output_dir.mkdir(parents=True, exist_ok=True)
-    target_frames = 30
+    target_frames = 48
     seconds_per_frame = max(1, math.ceil(max(duration, 1) / target_frames))
     pattern = output_dir / "frame_%04d.jpg"
     cmd = [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel", "error",
-        "-y",
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
         "-i", str(video_path),
-        "-vf", f"fps=1/{seconds_per_frame},scale=640:-1",
+        "-vf", f"fps=1/{seconds_per_frame},scale=768:-1",
         "-frames:v", str(target_frames),
         str(pattern),
     ]
@@ -204,7 +206,6 @@ def analyze_frames(frames):
     brightness_values = []
     contrast_values = []
     motion_values = []
-    color_names = []
 
     for index, frame in enumerate(frames, start=1):
         image = cv2.imread(str(frame))
@@ -216,16 +217,13 @@ def analyze_frames(frames):
         contrast = float(np.std(gray))
         saturation = float(np.mean(hsv[:, :, 1]))
         edge_density = float(np.mean(cv2.Canny(gray, 80, 160) > 0))
-        dominant = dominant_color_name(image)
         motion = 0.0
         if previous_gray is not None:
             motion = float(np.mean(cv2.absdiff(gray, previous_gray)))
         previous_gray = gray
-
         brightness_values.append(brightness)
         contrast_values.append(contrast)
         motion_values.append(motion)
-        color_names.append(dominant)
         timeline.append({
             "frame": index,
             "brightness": round(brightness, 1),
@@ -233,48 +231,58 @@ def analyze_frames(frames):
             "saturation": round(saturation, 1),
             "motion": round(motion, 1),
             "edgeDensity": round(edge_density, 3),
-            "dominantColor": dominant,
-            "description": describe_frame(brightness, contrast, saturation, motion, edge_density, dominant),
         })
 
-    most_common_color = max(set(color_names), key=color_names.count) if color_names else "neutral"
     return {
         "timeline": timeline,
         "summary": {
-            "avgBrightness": round(float(np.mean(brightness_values)), 1),
-            "avgContrast": round(float(np.mean(contrast_values)), 1),
-            "avgMotion": round(float(np.mean(motion_values)), 1),
-            "peakMotion": round(float(np.max(motion_values)), 1),
-            "dominantColor": most_common_color,
-            "visualPace": classify_pace(float(np.mean(motion_values)), float(np.max(motion_values))),
-            "lighting": classify_lighting(float(np.mean(brightness_values))),
-            "detailLevel": classify_detail(float(np.mean(contrast_values))),
+            "avgBrightness": round(float(np.mean(brightness_values)), 1) if brightness_values else 0,
+            "avgContrast": round(float(np.mean(contrast_values)), 1) if contrast_values else 0,
+            "avgMotion": round(float(np.mean(motion_values)), 1) if motion_values else 0,
+            "peakMotion": round(float(np.max(motion_values)), 1) if motion_values else 0,
         },
     }
 
 
-def analyze_frame_content(frames, metadata):
+def analyze_audit_content(frames, metadata, visual_analysis, audit_frame_count):
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        raise UserFacingError("Set OPENAI_API_KEY before analyzing video content. FFmpeg and OpenCV extract the frames; the vision model identifies what is actually in them.")
+        raise UserFacingError("Set OPENAI_API_KEY before running audit video analysis. FFmpeg and OpenCV extract frames; the vision model evaluates audit risks and findings.")
 
-    selected_frames = select_semantic_frames(frames, max_frames=8)
+    selected_frames = select_audit_frames(frames, max_frames=audit_frame_count)
     content = [{
         "type": "input_text",
         "text": (
-            "Analyze these extracted video frames in chronological order. Identify the real visible content, "
-            "main subjects, actions, setting, any readable text, mood, and how the story changes over time. "
-            "This is for a screen-presenter style voiceover. The final script should sound like the person "
-            "is actually presenting the screen in real time, explaining what the audience can see, what each "
-            "visible feature is used for, and why choices on screen matter. Use first person naturally where useful, "
-            "for example 'Here I can choose...' or 'In this example I use...'. Do not use timestamps, scene labels, "
-            "or generic phrases like 'let me walk you through this video'. "
-            "Return strict JSON with this shape: "
-            "{\"summary\":\"...\",\"setting\":\"...\",\"mainSubjects\":[\"...\"],"
-            "\"actions\":[\"...\"],\"visibleText\":[\"...\"],\"storyArc\":\"...\","
-            "\"presentationScript\":\"a natural first-person spoken screen presentation under 390 words\","
-            "\"frames\":[{\"index\":1,\"timestamp\":\"00:00\",\"description\":\"...\","
-            "\"subjects\":[\"...\"],\"actions\":[\"...\"],\"importance\":\"...\"}]}"
+            "Act as a professional internal auditor reviewing a video walkthrough, site inspection, process recording, "
+            "or screen recording. Analyze the extracted frames in chronological order. Look for visible or reasonably "
+            "inferable risks, obstacles, control weaknesses, safety issues, compliance concerns, physical security gaps, "
+            "data privacy risks, access-control problems, asset protection issues, housekeeping problems, blocked exits, "
+            "trip hazards, unclear procedures, missing labels, unsafe behavior, exposed sensitive information, and process "
+            "inefficiencies. Review every provided frame in detail before summarizing findings. For each frame, inspect: "
+            "people and PPE, walkways and exits, tools/equipment, cables and obstructions, signage and labels, cleanliness, "
+            "security controls, screens or documents that may expose sensitive data, access paths, process handoffs, storage "
+            "conditions, emergency preparedness, and any missing or weak control evidence. Distinguish confirmed observations "
+            "from plausible risks. Build a complete risk inventory before writing the final report. Every visible or reasonably "
+            "inferable risk detected in any reviewed frame must be represented in the findings array. Do not omit lower-severity "
+            "risks just because higher-severity risks exist. Do not limit the number of findings. If the same risk appears in "
+            "multiple frames, consolidate it into one finding and cite the relevant frame numbers or timestamp range in the "
+            "evidence. If several observations are related by the same root cause or control weakness, connect them in one "
+            "finding and describe the relationship. If observations are unrelated, keep them as separate findings. "
+            "Be evidence-based: do not invent findings that are not supported by the frames. Return strict JSON "
+            "with this shape: {\"title\":\"...\",\"executiveSummary\":\"...\",\"auditScope\":\"...\","
+            "\"overallRiskRating\":\"Low|Medium|High|Critical\",\"framesReviewed\":0,"
+            "\"findings\":[{\"id\":\"F-001\",\"title\":\"...\",\"severity\":\"Low|Medium|High|Critical\","
+            "\"category\":\"Safety|Operational|Compliance|Security|Privacy|Process|Housekeeping|Other\","
+            "\"evidence\":\"detailed observations from one or more frames that support the finding\","
+            "\"timestamp\":\"approximate timestamp or frame range if useful\","
+            "\"risk\":\"why this matters\",\"impact\":\"potential consequence\","
+            "\"recommendation\":\"practical remediation\",\"confidence\":\"Low|Medium|High\"}],"
+            "\"positiveControls\":[\"...\"],\"limitations\":[\"...\"]}. "
+            "The detailed frame analysis and all detected risks must be reflected inside finding evidence, risk, impact, "
+            "and recommendation fields. "
+            "Do not return a separate frame observation section. Findings should be specific, actionable, and supported by "
+            "what is visible across one or more frames. The findings array is the complete list of detected risks. "
+            "If no material risks are visible, return an empty findings array and explain the limitation."
         ),
     }]
 
@@ -291,59 +299,80 @@ def analyze_frame_content(frames, metadata):
 
     payload = {
         "model": os.environ.get("OPENAI_MODEL", DEFAULT_VISION_MODEL),
-        "input": [{
-            "role": "user",
-            "content": content,
-        }],
+        "input": [{"role": "user", "content": content}],
         "text": {"format": {"type": "json_object"}},
-        "max_output_tokens": 1600,
+        "max_output_tokens": 6000,
     }
 
     request = urllib.request.Request(
         OPENAI_RESPONSES_URL,
         data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         method="POST",
     )
 
     try:
-        with urllib.request.urlopen(request, timeout=90) as response:
+        with urllib.request.urlopen(request, timeout=120) as response:
             data = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
-        raise UserFacingError(f"Vision analysis request failed: {detail}") from exc
+        raise UserFacingError(f"Vision audit request failed: {detail}") from exc
     except urllib.error.URLError as exc:
         raise UserFacingError(f"Could not reach the vision model API: {exc.reason}") from exc
 
-    text = extract_response_text(data)
+    report = parse_audit_report(extract_response_text(data))
+    report["modelReportedFramesReviewed"] = report.get("framesReviewed")
+    report["framesReviewed"] = len(selected_frames)
+    report["effectiveFramesReviewed"] = len(selected_frames)
+    report["requestedFrames"] = audit_frame_count
+    report["extractedFramesAvailable"] = len(frames)
+    report["visualMetrics"] = visual_analysis.get("summary", {})
+    return report
+
+
+def parse_audit_report(text):
     try:
-        parsed = json.loads(text)
+        report = json.loads(text)
     except json.JSONDecodeError:
-        parsed = {
-            "summary": text,
-            "setting": "Unknown",
-            "mainSubjects": [],
-            "actions": [],
-            "visibleText": [],
-            "storyArc": text,
-            "frames": [],
+        report = {
+            "title": "AI Audit Video Review",
+            "executiveSummary": text,
+            "auditScope": "Video walkthrough review based on extracted frames.",
+            "overallRiskRating": "Medium",
+            "framesReviewed": 0,
+            "findings": [],
+            "positiveControls": [],
+            "limitations": ["The model response was not valid JSON, so only the summary could be preserved."],
         }
 
-    parsed.setdefault("frames", [])
-    parsed.setdefault("summary", "")
-    parsed.setdefault("setting", "")
-    parsed.setdefault("mainSubjects", [])
-    parsed.setdefault("actions", [])
-    parsed.setdefault("visibleText", [])
-    parsed.setdefault("storyArc", "")
-    parsed.setdefault("presentationScript", "")
-    return parsed
+    report.setdefault("title", "AI Audit Video Review")
+    report.setdefault("executiveSummary", "")
+    report.setdefault("auditScope", "Video walkthrough review based on extracted frames.")
+    report.setdefault("overallRiskRating", "Medium")
+    report.setdefault("framesReviewed", 0)
+    report.setdefault("findings", [])
+    report.setdefault("positiveControls", [])
+    report.setdefault("limitations", [])
+
+    normalized = []
+    for index, finding in enumerate(report.get("findings") or [], start=1):
+        normalized.append({
+            "id": finding.get("id") or f"F-{index:03d}",
+            "title": finding.get("title") or "Untitled finding",
+            "severity": finding.get("severity") or "Medium",
+            "category": finding.get("category") or "Other",
+            "evidence": finding.get("evidence") or "Evidence not specified.",
+            "timestamp": finding.get("timestamp") or "",
+            "risk": finding.get("risk") or "Risk not specified.",
+            "impact": finding.get("impact") or "Impact not specified.",
+            "recommendation": finding.get("recommendation") or "Review and remediate as appropriate.",
+            "confidence": finding.get("confidence") or "Medium",
+        })
+    report["findings"] = normalized
+    return report
 
 
-def select_semantic_frames(frames, max_frames):
+def select_audit_frames(frames, max_frames):
     if len(frames) <= max_frames:
         return frames
     indexes = np.linspace(0, len(frames) - 1, max_frames, dtype=int)
@@ -372,207 +401,7 @@ def extract_response_text(data):
                 chunks.append(content["text"])
     if chunks:
         return "\n".join(chunks)
-    raise UserFacingError("The vision model returned no readable text.")
-
-
-def dominant_color_name(image):
-    average = np.mean(image.reshape(-1, 3), axis=0)
-    b, g, r = average
-    colors = {
-        "red/warm": np.array([60, 70, 170]),
-        "green/natural": np.array([70, 150, 70]),
-        "blue/cool": np.array([170, 100, 70]),
-        "yellow/bright": np.array([70, 180, 190]),
-        "neutral gray": np.array([125, 125, 125]),
-        "dark": np.array([45, 45, 45]),
-        "light": np.array([210, 210, 210]),
-    }
-    sample = np.array([b, g, r])
-    return min(colors, key=lambda name: np.linalg.norm(sample - colors[name]))
-
-
-def describe_frame(brightness, contrast, saturation, motion, edge_density, color):
-    light = classify_lighting(brightness)
-    pace = "little motion" if motion < 7 else "noticeable motion" if motion < 18 else "strong motion"
-    detail = "simple composition" if edge_density < 0.05 else "moderate detail" if edge_density < 0.11 else "dense visual detail"
-    mood = "muted" if saturation < 60 else "balanced" if saturation < 110 else "vivid"
-    return f"{light} lighting, {pace}, {detail}, {mood} color, with a {color} cast"
-
-
-def classify_lighting(value):
-    if value < 75:
-        return "low-key"
-    if value > 170:
-        return "bright"
-    return "balanced"
-
-
-def classify_pace(avg_motion, peak_motion):
-    if avg_motion > 16 or peak_motion > 35:
-        return "fast and energetic"
-    if avg_motion > 8 or peak_motion > 20:
-        return "moderate and active"
-    return "calm and steady"
-
-
-def classify_detail(value):
-    if value > 62:
-        return "high contrast"
-    if value > 38:
-        return "moderate contrast"
-    return "soft contrast"
-
-
-def interpret_video(metadata, analysis, semantic):
-    summary = analysis["summary"]
-    duration = metadata["duration"]
-    pacing = summary["visualPace"]
-    lighting = summary["lighting"]
-    detail = summary["detailLevel"]
-    color = summary["dominantColor"]
-    structure = infer_structure(analysis["timeline"])
-    content_summary = semantic.get("summary") or "The semantic content could not be summarized."
-    story_arc = semantic.get("storyArc") or structure
-    return {
-        "overview": f"The video runs for {format_duration(duration)}. Content analysis: {content_summary}",
-        "visualTone": infer_tone(summary),
-        "structure": story_arc,
-        "setting": semantic.get("setting", ""),
-        "mainSubjects": semantic.get("mainSubjects", []),
-        "actions": semantic.get("actions", []),
-        "visibleText": semantic.get("visibleText", []),
-        "frames": semantic.get("frames", []),
-        "presentationScript": semantic.get("presentationScript", ""),
-        "productionNotes": [
-            f"Visual rhythm: {pacing}; lighting: {lighting}; contrast: {detail}; color impression: {color}.",
-            f"Resolution: {metadata['width']} x {metadata['height']} at about {metadata['fps']} fps.",
-            f"Average motion score: {summary['avgMotion']} with a peak of {summary['peakMotion']}.",
-            f"Average brightness: {summary['avgBrightness']} and average contrast: {summary['avgContrast']}.",
-        ],
-    }
-
-
-def infer_tone(summary):
-    if summary["visualPace"] == "fast and energetic" and summary["lighting"] == "bright":
-        return "energetic, direct, and attention-grabbing"
-    if summary["lighting"] == "low-key":
-        return "quiet, serious, and atmospheric"
-    if summary["detailLevel"] == "high contrast":
-        return "crisp, dramatic, and visually defined"
-    return "clear, observational, and measured"
-
-
-def infer_structure(timeline):
-    if len(timeline) < 3:
-        return "The clip is short, so it reads as a single visual moment."
-    first = timeline[0]["description"]
-    middle = timeline[len(timeline) // 2]["description"]
-    last = timeline[-1]["description"]
-    return f"It opens with {first}; develops into {middle}; and closes with {last}."
-
-
-def generate_script(metadata, analysis, interpretation):
-    model_script = clean_model_script(interpretation.get("presentationScript", ""))
-    if model_script:
-        return build_script_response(model_script)
-
-    summary = analysis["summary"]
-    subjects = join_items(interpretation.get("mainSubjects", []), "the main visible subjects")
-    actions = join_items(interpretation.get("actions", []), "the visible actions")
-    visible_text = join_items(interpretation.get("visibleText", []), "no clearly readable text")
-    frame_beats = build_presenter_frame_beats(interpretation.get("frames", []))
-
-    script = f"""
-Here you can see {subjects} in {interpretation.get('setting') or 'the interface shown on screen'}. The main thing I am showing is {actions}.
-
-{frame_beats}
-
-The important part is what these visible elements allow me to do. I can use the controls on screen to make choices, compare options, and show how the workflow changes depending on the selected settings. If there are tradeoffs, I would explain them directly while the relevant part of the screen is visible, so the audience understands both the feature and the consequence of using it.
-
-Overall, this screen is showing the following flow: {interpretation['structure']}
-
-The visible text I can refer to is: {visible_text}. By the end, the audience should understand what is on the screen, what I am selecting or demonstrating, and why those choices matter.
-""".strip()
-
-    return build_script_response(script)
-
-
-def build_script_response(script):
-    words = script.split()
-    if len(words) > TARGET_SCRIPT_WORDS:
-        script = " ".join(words[:TARGET_SCRIPT_WORDS]).rsplit(".", 1)[0] + "."
-    return {
-        "title": "Generated Screen Presentation Script",
-        "estimatedReadTimeSeconds": estimate_read_time(script),
-        "wordCount": len(script.split()),
-        "text": script,
-    }
-
-
-def clean_model_script(script):
-    text = str(script or "").strip()
-    banned_openers = (
-        "let me walk you through",
-        "in this video, we will",
-        "this video shows",
-    )
-    if any(text.lower().startswith(opener) for opener in banned_openers):
-        return ""
-    return text
-
-
-def build_presenter_frame_beats(frames):
-    cleaned = [frame for frame in frames if frame.get("description")]
-    if not cleaned:
-        return "On the screen, I would focus on the visible controls, labels, and user actions, explaining each part as it appears."
-
-    selected = cleaned[:4]
-    phrases = []
-    starters = [
-        "At the start, I focus on",
-        "Then I point out",
-        "Next I explain",
-        "Finally I bring attention to",
-    ]
-    for index, frame in enumerate(selected):
-        description = normalize_frame_description(frame.get("description", ""))
-        phrases.append(f"{starters[index]} {description}.")
-    return " ".join(phrases)
-
-
-def normalize_frame_description(description):
-    text = str(description).strip().rstrip(".")
-    if not text:
-        return "the visible action continues"
-    lowered = text.lower()
-    if lowered.startswith("presenter "):
-        return f"the {text}"
-    for prefix in ("a ", "an ", "the "):
-        if lowered.startswith(prefix):
-            return text
-    return text
-
-
-def join_items(items, fallback):
-    cleaned = [str(item).strip() for item in items if str(item).strip()]
-    if not cleaned:
-        return fallback
-    if len(cleaned) == 1:
-        return cleaned[0]
-    if len(cleaned) == 2:
-        return f"{cleaned[0]} and {cleaned[1]}"
-    return ", ".join(cleaned[:-1]) + f", and {cleaned[-1]}"
-
-
-def select_timeline_points(timeline):
-    if not timeline:
-        return []
-    indexes = sorted(set([0, len(timeline) // 2, len(timeline) - 1]))
-    return [timeline[index] for index in indexes]
-
-
-def estimate_read_time(text):
-    return min(180, math.ceil(len(text.split()) / 2.5))
+    raise UserFacingError("The vision model returned no readable audit report.")
 
 
 def format_duration(seconds):
@@ -585,10 +414,10 @@ def format_duration(seconds):
 
 def main():
     DATA_DIR.mkdir(exist_ok=True)
-    port = int(os.environ.get("PORT", "5173"))
+    port = int(os.environ.get("PORT", "5174"))
     os.chdir(PUBLIC_DIR)
     server = ThreadingHTTPServer(("127.0.0.1", port), AppHandler)
-    print(f"Video Interpreter running at http://localhost:{port}")
+    print(f"AI Audit Video Analyzer running at http://localhost:{port}")
     print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()

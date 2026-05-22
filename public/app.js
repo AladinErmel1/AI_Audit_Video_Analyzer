@@ -1,28 +1,36 @@
-const form = document.querySelector("#uploadForm");
+﻿const form = document.querySelector("#uploadForm");
 const input = document.querySelector("#videoInput");
 const analyzeButton = document.querySelector("#analyzeButton");
 const fileMeta = document.querySelector("#fileMeta");
 const message = document.querySelector("#message");
 const progress = document.querySelector("#progress");
 const health = document.querySelector("#health");
+const frameSlider = document.querySelector("#frameSlider");
+const frameCountValue = document.querySelector("#frameCountValue");
 const emptyState = document.querySelector("#emptyState");
 const results = document.querySelector("#results");
 const metrics = document.querySelector("#metrics");
-const scriptTitle = document.querySelector("#scriptTitle");
-const scriptStats = document.querySelector("#scriptStats");
-const scriptText = document.querySelector("#scriptText");
-const overview = document.querySelector("#overview");
-const structure = document.querySelector("#structure");
-const timeline = document.querySelector("#timeline");
 const copyButton = document.querySelector("#copyButton");
+const reportTitle = document.querySelector("#reportTitle");
+const executiveSummary = document.querySelector("#executiveSummary");
+const auditScope = document.querySelector("#auditScope");
+const findingCount = document.querySelector("#findingCount");
+const findings = document.querySelector("#findings");
+const positiveControls = document.querySelector("#positiveControls");
+const limitations = document.querySelector("#limitations");
 
 let selectedFile = null;
+let latestReportText = "";
 
 checkHealth();
 
 input.addEventListener("change", () => {
   selectedFile = input.files[0] || null;
   updateSelectedFile();
+});
+
+frameSlider.addEventListener("input", () => {
+  frameCountValue.textContent = frameSlider.value;
 });
 
 for (const eventName of ["dragenter", "dragover"]) {
@@ -54,17 +62,18 @@ analyzeButton.addEventListener("click", async () => {
 
   const body = new FormData();
   body.append("video", selectedFile);
+  body.append("auditFrames", frameSlider.value);
   setBusy(true);
-  setMessage("Extracting frames and interpreting the real video content...", false);
+  setMessage(`Extracting frames and reviewing ${frameSlider.value} audit frames...`, false);
 
   try {
     const response = await fetch("/api/analyze", { method: "POST", body });
     const payload = await response.json();
     if (!response.ok || payload.error) {
-      throw new Error(payload.error || "Analysis failed.");
+      throw new Error(payload.error || "Audit analysis failed.");
     }
     renderResults(payload);
-    setMessage(`Analyzed ${payload.contentFramesAnalyzed} content frames from ${payload.fileName}.`, false);
+    setMessage(`Reviewed ${payload.auditFramesAnalyzed} audit frames from ${payload.fileName}.`, false);
   } catch (error) {
     setMessage(error.message, true);
   } finally {
@@ -73,10 +82,10 @@ analyzeButton.addEventListener("click", async () => {
 });
 
 copyButton.addEventListener("click", async () => {
-  await navigator.clipboard.writeText(scriptText.value);
+  await navigator.clipboard.writeText(latestReportText);
   copyButton.textContent = "Copied";
   setTimeout(() => {
-    copyButton.textContent = "Copy";
+    copyButton.textContent = "Copy report";
   }, 1200);
 });
 
@@ -87,7 +96,7 @@ async function checkHealth() {
     const ready = payload.ok && payload.opencv && payload.ffmpeg && payload.vision;
     health.classList.toggle("ok", ready);
     health.classList.toggle("warn", !ready);
-    health.textContent = ready ? "Semantic analysis ready" : "Setup needed";
+    health.textContent = ready ? "Audit AI ready" : "Setup needed";
   } catch {
     health.classList.add("warn");
     health.textContent = "Server offline";
@@ -96,16 +105,12 @@ async function checkHealth() {
 
 function updateSelectedFile() {
   analyzeButton.disabled = !selectedFile;
-  if (!selectedFile) {
-    fileMeta.textContent = "No file selected";
-    return;
-  }
-  fileMeta.textContent = `${selectedFile.name} - ${formatBytes(selectedFile.size)}`;
+  fileMeta.textContent = selectedFile ? `${selectedFile.name} - ${formatBytes(selectedFile.size)}` : "No file selected";
 }
 
 function setBusy(isBusy) {
   analyzeButton.disabled = isBusy || !selectedFile;
-  analyzeButton.textContent = isBusy ? "Analyzing..." : "Analyze video";
+  analyzeButton.textContent = isBusy ? "Analyzing..." : "Run audit analysis";
   progress.hidden = !isBusy;
 }
 
@@ -119,16 +124,21 @@ function renderResults(payload) {
   results.hidden = false;
   copyButton.disabled = false;
 
+  const report = payload.auditReport;
   const metadata = payload.metadata;
-  const script = payload.script;
-  const interpretation = payload.interpretation;
+  const visual = payload.visualAnalysis?.summary || {};
 
   metrics.innerHTML = "";
+  const effectiveFrames = payload.effectiveAuditFrames || payload.auditFramesAnalyzed || report.framesReviewed || 0;
+  const requestedFrames = payload.requestedAuditFrames || report.requestedFrames || Number(frameSlider.value) || effectiveFrames;
+  const frameLabel = effectiveFrames === requestedFrames
+    ? String(effectiveFrames)
+    : `${effectiveFrames} of ${requestedFrames} requested`;
   [
+    ["Overall risk", report.overallRiskRating || "Not rated"],
+    ["Findings", report.findings.length],
+    ["Frames reviewed", frameLabel],
     ["Duration", formatDuration(metadata.duration)],
-    ["Frames", payload.framesAnalyzed],
-    ["Content frames", payload.contentFramesAnalyzed],
-    ["Read time", `${script.estimatedReadTimeSeconds}s`],
   ].forEach(([label, value]) => {
     const item = document.createElement("div");
     item.className = "metric";
@@ -136,22 +146,100 @@ function renderResults(payload) {
     metrics.appendChild(item);
   });
 
-  scriptTitle.textContent = script.title;
-  scriptStats.textContent = `${script.wordCount} words - estimated ${script.estimatedReadTimeSeconds} seconds aloud`;
-  scriptText.value = script.text;
-  overview.textContent = interpretation.overview;
-  structure.textContent = interpretation.structure;
+  reportTitle.textContent = report.title || "AI Audit Video Review";
+  executiveSummary.textContent = report.executiveSummary || "No executive summary returned.";
+  auditScope.textContent = report.auditScope || "Scope: review of extracted video frames.";
+  findingCount.textContent = `${report.findings.length} finding${report.findings.length === 1 ? "" : "s"}`;
 
-  timeline.innerHTML = "";
-  const contentTimeline = payload.semanticAnalysis?.frames?.length ? payload.semanticAnalysis.frames : payload.timeline;
-  contentTimeline.forEach((item) => {
-    const node = document.createElement("div");
-    node.className = "timeline-item";
-    const label = item.timestamp ? `Frame ${item.index} - ${item.timestamp}` : `Frame ${item.frame}`;
-    const text = item.description || item.importance || "";
-    node.innerHTML = `<strong>${label}</strong><br>${text}`;
-    timeline.appendChild(node);
+  findings.innerHTML = "";
+  if (!report.findings.length) {
+    const empty = document.createElement("div");
+    empty.className = "finding empty-finding";
+    empty.textContent = "No material audit findings were visible in the reviewed frames.";
+    findings.appendChild(empty);
+  } else {
+    report.findings.forEach((finding) => findings.appendChild(renderFinding(finding)));
+  }
+
+  renderList(positiveControls, report.positiveControls, "No positive controls were identified in the reviewed frames.");
+  renderList(limitations, report.limitations, "No limitations were provided.");
+
+  latestReportText = buildReportText(report, metadata, visual);
+}
+
+function renderFinding(finding) {
+  const node = document.createElement("article");
+  const severity = String(finding.severity || "Medium").toLowerCase();
+  node.className = `finding severity-${severity}`;
+  node.innerHTML = `
+    <div class="finding-topline">
+      <span class="finding-id">${escapeHtml(finding.id || "F-000")}</span>
+      <span class="severity-pill">${escapeHtml(finding.severity || "Medium")}</span>
+      <span class="category-pill">${escapeHtml(finding.category || "Other")}</span>
+    </div>
+    <h4>${escapeHtml(finding.title || "Untitled finding")}</h4>
+    <dl>
+      <dt>Evidence</dt><dd>${escapeHtml(withTimestamp(finding.evidence, finding.timestamp))}</dd>
+      <dt>Risk</dt><dd>${escapeHtml(finding.risk || "Risk not specified.")}</dd>
+      <dt>Impact</dt><dd>${escapeHtml(finding.impact || "Impact not specified.")}</dd>
+      <dt>Recommendation</dt><dd>${escapeHtml(finding.recommendation || "Review and remediate as appropriate.")}</dd>
+      <dt>Confidence</dt><dd>${escapeHtml(finding.confidence || "Medium")}</dd>
+    </dl>
+  `;
+  return node;
+}
+
+function renderList(target, items, fallback) {
+  target.innerHTML = "";
+  const values = Array.isArray(items) && items.length ? items : [fallback];
+  values.forEach((item) => {
+    const li = document.createElement("li");
+    li.textContent = item;
+    target.appendChild(li);
   });
+}
+
+function buildReportText(report, metadata, visual) {
+  const lines = [
+    report.title || "AI Audit Video Review",
+    "",
+    `Overall risk: ${report.overallRiskRating || "Not rated"}`,
+    `Video duration: ${formatDuration(metadata.duration)}`,
+    `Frames reviewed: ${report.effectiveFramesReviewed || report.framesReviewed || "n/a"}`,
+    `Requested frames: ${report.requestedFrames || "n/a"}`,
+    "",
+    "Executive summary:",
+    report.executiveSummary || "No executive summary returned.",
+    "",
+    "Findings:",
+  ];
+  if (!report.findings.length) {
+    lines.push("No material audit findings were visible in the reviewed frames.");
+  } else {
+    report.findings.forEach((finding) => {
+      lines.push(`- ${finding.id} [${finding.severity}] ${finding.title}`);
+      lines.push(`  Evidence: ${withTimestamp(finding.evidence, finding.timestamp)}`);
+      lines.push(`  Risk: ${finding.risk}`);
+      lines.push(`  Impact: ${finding.impact}`);
+      lines.push(`  Recommendation: ${finding.recommendation}`);
+    });
+  }
+  lines.push("", "Limitations:", ...(report.limitations || []));
+  return lines.join("\n");
+}
+
+function withTimestamp(text, timestamp) {
+  return timestamp ? `${text} (${timestamp})` : text;
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>'"]/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "'": "&#39;",
+    '"': "&quot;",
+  }[char]));
 }
 
 function formatBytes(bytes) {

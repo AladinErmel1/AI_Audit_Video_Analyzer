@@ -1,9 +1,9 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Video Interpreter</title>
+    <title>AI Audit Video Analyzer</title>
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
@@ -12,8 +12,8 @@
         <div class="upload-panel">
           <div class="brand-row">
             <div>
-              <p class="eyebrow">FFmpeg + OpenCV</p>
-              <h1>Video Interpreter</h1>
+              <p class="eyebrow">FFmpeg + OpenCV + Vision Audit</p>
+              <h1>AI Audit Video Analyzer</h1>
             </div>
             <span id="health" class="status-pill">Checking tools</span>
           </div>
@@ -22,13 +22,21 @@
             <input id="videoInput" name="video" type="file" accept="video/*">
             <div class="dropzone-content">
               <span class="upload-icon">+</span>
-              <strong>Upload a video</strong>
-              <span>Frames are extracted locally, interpreted with a vision model, and turned into a spoken audience guide.</span>
+              <strong>Upload walkthrough video</strong>
+              <span>Frames are extracted locally, then reviewed for risks, obstacles, control gaps, and audit findings.</span>
             </div>
           </form>
 
           <div id="fileMeta" class="file-meta">No file selected</div>
-          <button id="analyzeButton" class="primary-button" type="button" disabled>Analyze video</button>
+          <div class="range-control">
+            <div class="range-label">
+              <label for="frameSlider">Frames to review</label>
+              <strong id="frameCountValue">16</strong>
+            </div>
+            <input id="frameSlider" type="range" min="4" max="48" step="1" value="16">
+            <p>More frames improve coverage, but take longer and use more API input.</p>
+          </div>
+          <button id="analyzeButton" class="primary-button" type="button" disabled>Run audit analysis</button>
           <div id="progress" class="progress" hidden>
             <div></div>
           </div>
@@ -38,36 +46,46 @@
         <section class="result-panel" aria-live="polite">
           <div class="result-header">
             <div>
-              <p class="eyebrow">Generated output</p>
-              <h2>Audience guide script</h2>
+              <p class="eyebrow">Internal audit review</p>
+              <h2>Risk findings</h2>
             </div>
-            <button id="copyButton" class="ghost-button" type="button" disabled>Copy</button>
+            <button id="copyButton" class="ghost-button" type="button" disabled>Copy report</button>
           </div>
 
-          <div id="emptyState" class="empty-state">Upload a video to generate a natural spoken guide designed to stay below three minutes.</div>
+          <div id="emptyState" class="empty-state">Upload a site walkthrough or process video to generate audit findings and recommendations.</div>
 
           <div id="results" class="results" hidden>
             <div class="metrics" id="metrics"></div>
-            <div class="script-box">
-              <h3 id="scriptTitle"></h3>
-              <p id="scriptStats"></p>
-              <textarea id="scriptText" readonly></textarea>
-            </div>
+
+            <section class="summary-block">
+              <h3 id="reportTitle"></h3>
+              <p id="executiveSummary"></p>
+              <p id="auditScope"></p>
+            </section>
+
+            <section>
+              <div class="section-heading">
+                <h3>Findings</h3>
+                <span id="findingCount" class="count-pill"></span>
+              </div>
+              <p class="section-note">All detected risks are listed here. Related observations are grouped into connected findings.</p>
+              <div id="findings" class="findings"></div>
+            </section>
+
             <div class="analysis-grid">
               <section>
-                <h3>Interpretation</h3>
-                <p id="overview"></p>
-                <p id="structure"></p>
+                <h3>Positive controls</h3>
+                <ul id="positiveControls"></ul>
               </section>
               <section>
-                <h3>Timeline</h3>
-                <div id="timeline" class="timeline"></div>
+                <h3>Limitations</h3>
+                <ul id="limitations"></ul>
               </section>
             </div>
           </div>
         </section>
       </section>
     </main>
-    <script src="/app.js"></script>
+    <script src="/app.js?v=audit-findings-4"></script>
   </body>
 </html>
