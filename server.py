@@ -441,7 +441,7 @@ def main():
     DATA_DIR.mkdir(exist_ok=True)
     port = int(os.environ.get("PORT", "5174"))
     os.chdir(PUBLIC_DIR)
-    server = ThreadingHTTPServer(("127.0.0.1", port), AppHandler)
+    server = ThreadingHTTPServer(("0.0.0.0", port), AppHandler)
     print(f"AI Audit Video Analyzer running at http://localhost:{port}")
     print("Press Ctrl+C to stop.")
     try:
