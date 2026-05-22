@@ -2,7 +2,9 @@
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import base64
-import cgi
+import email.message
+import email.parser
+import email.policy
 import json
 import math
 import mimetypes
@@ -101,30 +103,26 @@ def handle_upload(handler):
     if not content_type:
         raise UserFacingError("Missing upload content type.")
 
-    form = cgi.FieldStorage(fp=handler.rfile, headers=handler.headers, environ={
-        "REQUEST_METHOD": "POST",
-        "CONTENT_TYPE": content_type,
-        "CONTENT_LENGTH": str(content_length),
-    })
+    form = parse_multipart(handler.rfile, content_type, content_length)
 
     if "video" not in form:
         raise UserFacingError("Upload field 'video' is required.")
 
     file_item = form["video"]
-    if not getattr(file_item, "filename", None):
+    if not file_item.get("filename"):
         raise UserFacingError("Choose a video file before analyzing.")
     audit_frame_count = parse_audit_frame_count(form)
 
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     FRAME_DIR.mkdir(parents=True, exist_ok=True)
     job_id = uuid.uuid4().hex
-    extension = Path(file_item.filename).suffix.lower() or ".mp4"
+    extension = Path(file_item["filename"]).suffix.lower() or ".mp4"
     upload_path = UPLOAD_DIR / f"{job_id}{extension}"
     frame_path = FRAME_DIR / job_id
     frame_path.mkdir(parents=True, exist_ok=True)
 
     with upload_path.open("wb") as target:
-        shutil.copyfileobj(file_item.file, target)
+        target.write(file_item["data"])
 
     metadata = probe_video(upload_path)
     frames = extract_frames(upload_path, frame_path, metadata["duration"])
@@ -137,7 +135,7 @@ def handle_upload(handler):
 
     return {
         "jobId": job_id,
-        "fileName": Path(file_item.filename).name,
+        "fileName": Path(file_item["filename"]).name,
         "metadata": metadata,
         "framesAnalyzed": len(frames),
         "requestedAuditFrames": audit_frame_count,
@@ -149,12 +147,39 @@ def handle_upload(handler):
 
 
 def parse_audit_frame_count(form):
-    raw_value = form.getvalue("auditFrames", str(DEFAULT_AUDIT_FRAMES))
+    field = form.get("auditFrames")
+    raw_value = field["data"].decode("utf-8") if field else str(DEFAULT_AUDIT_FRAMES)
     try:
         value = int(raw_value)
     except (TypeError, ValueError):
         raise UserFacingError("Audit frame count must be a number.")
     return max(MIN_AUDIT_FRAMES, min(MAX_AUDIT_FRAMES, value))
+
+
+def parse_multipart(rfile, content_type, content_length):
+    """Parse a multipart/form-data request body without the removed `cgi` module.
+
+    Returns a dict mapping field name to a dict with keys:
+      - "data": bytes  (raw field value)
+      - "filename": str | None  (original filename for file fields, else None)
+    """
+    body = rfile.read(content_length)
+    # Synthesise a minimal MIME message so the standard library can split parts.
+    mime_message = f"Content-Type: {content_type}\r\n\r\n".encode("latin-1") + body
+    parser = email.parser.BytesParser(policy=email.policy.compat32)
+    msg = parser.parsebytes(mime_message)
+
+    form = {}
+    for part in msg.get_payload():
+        if not isinstance(part, email.message.Message):
+            continue
+        disposition = part.get_param("name", header="content-disposition")
+        if disposition is None:
+            continue
+        filename = part.get_filename()
+        data = part.get_payload(decode=True)
+        form[disposition] = {"data": data if data is not None else b"", "filename": filename}
+    return form
 
 
 def probe_video(video_path):
