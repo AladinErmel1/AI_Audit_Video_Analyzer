@@ -11,13 +11,13 @@ The output is an audit report, not a narration script. It highlights visible or 
 - Python packages from `requirements.txt`
 - `OPENAI_API_KEY` for semantic audit analysis
 
-Install dependencies:
+Install dependencies (e.g. in your terminal/powershell):
 
 ```powershell
 pip install -r requirements.txt
 ```
 
-Run:
+Run in your terminal (e.g. powershell):
 
 ```powershell
 $env:OPENAI_API_KEY="your_api_key_here"
