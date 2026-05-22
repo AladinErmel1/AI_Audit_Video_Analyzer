@@ -55,7 +55,9 @@ class AppHandler(SimpleHTTPRequestHandler):
                 "ok": True,
                 "opencv": cv2 is not None,
                 "ffmpeg": shutil.which("ffmpeg") is not None,
-                "vision": bool(os.environ.get("OPENAI_API_KEY")),
+                "serverKeyConfigured": bool(os.environ.get("OPENAI_API_KEY")),
+                "clientKeySupported": True,
+                "vision": True,
                 "model": os.environ.get("OPENAI_MODEL", DEFAULT_VISION_MODEL),
             })
             return
@@ -112,6 +114,7 @@ def handle_upload(handler):
     if not file_item.get("filename"):
         raise UserFacingError("Choose a video file before analyzing.")
     audit_frame_count = parse_audit_frame_count(form)
+    api_key = parse_openai_api_key(form)
 
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     FRAME_DIR.mkdir(parents=True, exist_ok=True)
@@ -130,7 +133,7 @@ def handle_upload(handler):
         raise UserFacingError("No frames could be extracted from the video.")
 
     visual_analysis = analyze_frames(frames)
-    audit_report = analyze_audit_content(frames, metadata, visual_analysis, audit_frame_count)
+    audit_report = analyze_audit_content(frames, metadata, visual_analysis, audit_frame_count, api_key)
     effective_audit_frames = audit_report.get("effectiveFramesReviewed", 0)
 
     return {
@@ -154,6 +157,15 @@ def parse_audit_frame_count(form):
     except (TypeError, ValueError):
         raise UserFacingError("Audit frame count must be a number.")
     return max(MIN_AUDIT_FRAMES, min(MAX_AUDIT_FRAMES, value))
+
+
+def parse_openai_api_key(form):
+    field = form.get("openaiApiKey")
+    client_key = field["data"].decode("utf-8").strip() if field else ""
+    api_key = client_key or os.environ.get("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        raise UserFacingError("Enter an OpenAI API key in the app or set OPENAI_API_KEY on the server.")
+    return api_key
 
 
 def parse_multipart(rfile, content_type, content_length):
@@ -269,11 +281,7 @@ def analyze_frames(frames):
     }
 
 
-def analyze_audit_content(frames, metadata, visual_analysis, audit_frame_count):
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise UserFacingError("Set OPENAI_API_KEY before running audit video analysis. FFmpeg and OpenCV extract frames; the vision model evaluates audit risks and findings.")
-
+def analyze_audit_content(frames, metadata, visual_analysis, audit_frame_count, api_key):
     selected_frames = select_audit_frames(frames, max_frames=audit_frame_count)
     content = [{
         "type": "input_text",

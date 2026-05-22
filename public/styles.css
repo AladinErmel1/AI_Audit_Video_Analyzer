@@ -186,6 +186,44 @@ h3 {
   font-size: 14px;
 }
 
+.key-control {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 16px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.key-control label {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.key-control input {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 8px 10px;
+  color: var(--text);
+  background: #ffffff;
+}
+
+.key-control input:focus {
+  border-color: var(--accent);
+  outline: 3px solid rgba(13, 118, 110, 0.14);
+}
+
+.key-control p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .range-control {
   display: grid;
   gap: 8px;

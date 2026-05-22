@@ -5,6 +5,8 @@ const fileMeta = document.querySelector("#fileMeta");
 const message = document.querySelector("#message");
 const progress = document.querySelector("#progress");
 const health = document.querySelector("#health");
+const apiKeyInput = document.querySelector("#apiKeyInput");
+const apiKeyHint = document.querySelector("#apiKeyHint");
 const frameSlider = document.querySelector("#frameSlider");
 const frameCountValue = document.querySelector("#frameCountValue");
 const emptyState = document.querySelector("#emptyState");
@@ -21,6 +23,7 @@ const limitations = document.querySelector("#limitations");
 
 let selectedFile = null;
 let latestReportText = "";
+let serverKeyConfigured = false;
 
 checkHealth();
 
@@ -31,6 +34,10 @@ input.addEventListener("change", () => {
 
 frameSlider.addEventListener("input", () => {
   frameCountValue.textContent = frameSlider.value;
+});
+
+apiKeyInput.addEventListener("input", () => {
+  updateAnalyzeButton();
 });
 
 for (const eventName of ["dragenter", "dragover"]) {
@@ -63,6 +70,7 @@ analyzeButton.addEventListener("click", async () => {
   const body = new FormData();
   body.append("video", selectedFile);
   body.append("auditFrames", frameSlider.value);
+  body.append("openaiApiKey", apiKeyInput.value.trim());
   setBusy(true);
   setMessage(`Extracting frames and reviewing ${frameSlider.value} audit frames...`, false);
 
@@ -93,10 +101,18 @@ async function checkHealth() {
   try {
     const response = await fetch("/api/health");
     const payload = await response.json();
-    const ready = payload.ok && payload.opencv && payload.ffmpeg && payload.vision;
-    health.classList.toggle("ok", ready);
-    health.classList.toggle("warn", !ready);
-    health.textContent = ready ? "Audit AI ready" : "Setup needed";
+    const toolsReady = payload.ok && payload.opencv && payload.ffmpeg;
+    serverKeyConfigured = Boolean(payload.serverKeyConfigured);
+    health.classList.toggle("ok", toolsReady);
+    health.classList.toggle("warn", !toolsReady);
+    health.textContent = toolsReady
+      ? serverKeyConfigured ? "Audit AI ready" : "Enter API key"
+      : "Setup needed";
+    apiKeyInput.required = !serverKeyConfigured;
+    apiKeyHint.textContent = serverKeyConfigured
+      ? "Server API key is configured. You can leave this blank or override it for this request."
+      : "Used only for this analysis request. It is not stored by the app.";
+    updateAnalyzeButton();
   } catch {
     health.classList.add("warn");
     health.textContent = "Server offline";
@@ -104,14 +120,22 @@ async function checkHealth() {
 }
 
 function updateSelectedFile() {
-  analyzeButton.disabled = !selectedFile;
   fileMeta.textContent = selectedFile ? `${selectedFile.name} - ${formatBytes(selectedFile.size)}` : "No file selected";
+  updateAnalyzeButton();
 }
 
 function setBusy(isBusy) {
-  analyzeButton.disabled = isBusy || !selectedFile;
+  analyzeButton.disabled = isBusy || !canAnalyze();
   analyzeButton.textContent = isBusy ? "Analyzing..." : "Run audit analysis";
   progress.hidden = !isBusy;
+}
+
+function updateAnalyzeButton() {
+  analyzeButton.disabled = !canAnalyze();
+}
+
+function canAnalyze() {
+  return Boolean(selectedFile && (serverKeyConfigured || apiKeyInput.value.trim()));
 }
 
 function setMessage(text, isError) {

@@ -28,6 +28,11 @@
           </form>
 
           <div id="fileMeta" class="file-meta">No file selected</div>
+          <div class="key-control">
+            <label for="apiKeyInput">OpenAI API key</label>
+            <input id="apiKeyInput" type="password" autocomplete="off" spellcheck="false" placeholder="sk-...">
+            <p id="apiKeyHint">Used only for this analysis request. You can also configure OPENAI_API_KEY on the server.</p>
+          </div>
           <div class="range-control">
             <div class="range-label">
               <label for="frameSlider">Frames to review</label>
@@ -86,6 +91,6 @@
         </section>
       </section>
     </main>
-    <script src="/app.js?v=audit-findings-4"></script>
+    <script src="/app.js?v=app-key-5"></script>
   </body>
 </html>
